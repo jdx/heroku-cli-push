@@ -1,6 +1,6 @@
 // @flow
 
-import Push from './push'
+// import Push from './push'
 import nock from 'nock'
 
 let api = nock('https://api.heroku.com:443')
