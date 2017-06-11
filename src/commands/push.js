@@ -17,11 +17,6 @@ export default class Status extends Command {
     if (this.flags.verbose && this.flags.silent) this.out.error('may not have --verbose and --silent')
   }
 
-  renderer () {
-    if (this.flags.silent) return 'silent'
-    if (this.flags.verbose) return 'verbose'
-  }
-
   run () {
     this.validate()
     const tasks = new Listr([
@@ -49,18 +44,31 @@ export default class Status extends Command {
         enabled: ctx => ctx.yarn === false,
         task: () => wait(1000)
       },
-      {
-        title: 'Run tests',
-        task: () => wait(1000)
-      },
-      {
-        title: 'Publish package',
-        task: () => wait(1000)
-      }
+      this.tests(),
+      this.publish()
     ], {
-      renderer: this.renderer()
+      renderer: this.renderer
     })
 
     return tasks.run()
+  }
+
+  get renderer (): ?string {
+    if (this.flags.silent) return 'silent'
+    if (this.flags.verbose) return 'verbose'
+  }
+
+  tests () {
+    return {
+      title: 'Run tests',
+      task: () => wait(1000)
+    }
+  }
+
+  publish () {
+    return {
+      title: 'Publish package',
+      task: () => wait(1000)
+    }
   }
 }
