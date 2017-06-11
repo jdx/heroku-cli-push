@@ -25,22 +25,17 @@ export default class Status extends Command {
     }
   ]
 
-  validate () {
-    if (this.flags.verbose && this.flags.silent) throw new Error('may not have --verbose and --silent')
-  }
-
-  run () {
+  async run () {
     this.validate()
     process.chdir(this.root)
-    const tasks = new Listr([
-      this.gitChecks(),
-      this.tests(),
-      this.publish()
-    ], {
+    const listr = new Listr(this.tasks(), {
       renderer: this.renderer
     })
 
-    return tasks.run()
+    await listr.run()
+  }
+  validate () {
+    if (this.flags.verbose && this.flags.silent) throw new Error('may not have --verbose and --silent')
   }
 
   get renderer (): ?string {
@@ -52,6 +47,14 @@ export default class Status extends Command {
     return path.resolve(this.args.root || '.')
   }
 
+  tasks () {
+    return [
+      this.gitChecks(),
+      this.tests(),
+      this.initializeBuild()
+    ]
+  }
+
   gitChecks () {
     return {
       title: 'Git prerequisite checks',
@@ -60,19 +63,18 @@ export default class Status extends Command {
         this.gitRemoteHistory(),
         this.gitDirty(),
         this.gitCurrentBranch()
-      ], {})
+      ], {concurrent: true})
     }
   }
 
-  gitCurrentBranch () {
+  gitRemoteHistory () {
     return {
-      title: 'Check current branch',
-      skip: () => this.flags['any-branch'],
-      task: () => execa.stdout('git', ['symbolic-ref', '--short', 'HEAD']).then(branch => {
-        if (branch !== 'master') {
-          throw new Error('Not on `master` branch. Use --any-branch to publish anyway.')
-        }
-      })
+      title: 'Check remote history',
+      task: async () => {
+        let rev = await execa.stdout('git', ['rev-list', '--count', '--left-only', '@{u}...HEAD'])
+        if (rev !== '0') throw new Error('Remote history differs. Please pull changes.')
+        await wait(400) // fake wait for demo
+      }
     }
   }
 
@@ -80,35 +82,36 @@ export default class Status extends Command {
     return {
       title: 'Check local working tree',
       skip: () => this.flags.dirty,
-      task: () => execa.stdout('git', ['status', '--porcelain']).then(status => {
-        if (status !== '') {
-          throw new Error('Unclean working tree. Commit or stash changes first.')
-        }
-      })
+      task: async () => {
+        let status = await execa.stdout('git', ['status', '--porcelain'])
+        if (status !== '') throw new Error('Unclean working tree. Commit or stash changes first.')
+        await wait(400) // fake wait for demo
+      }
     }
   }
 
-  gitRemoteHistory () {
+  gitCurrentBranch () {
     return {
-      title: 'Check remote history',
-      task: () => execa.stdout('git', ['rev-list', '--count', '--left-only', '@{u}...HEAD']).then(result => {
-        if (result !== '0') {
-          throw new Error('Remote history differs. Please pull changes.')
-        }
-      })
+      title: 'Check current branch',
+      skip: () => this.flags['any-branch'],
+      task: async () => {
+        let branch = await execa.stdout('git', ['symbolic-ref', '--short', 'HEAD'])
+        if (branch !== 'master') throw new Error('Not on `master` branch. Use --any-branch to publish anyway.')
+        await wait(800) // fake wait for demo
+      }
     }
   }
 
   tests () {
     return {
       title: 'Run tests',
-      task: () => wait(1000)
+      task: () => wait(300)
     }
   }
 
-  publish () {
+  initializeBuild () {
     return {
-      title: 'Publish package',
+      title: 'Initializing build',
       task: () => wait(1000)
     }
   }
