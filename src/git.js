@@ -18,10 +18,11 @@ export default class Git {
     try {
       return await execa.stdout('git', args)
     } catch (err) {
-      if (err.message.includes("fatal: no upstream configured for branch 'master'")) {
-        throw new Error(`${err.message}\nIf you wish to set tracking information for this branch to origin/master you can do so with:
+      if (err.message.includes('fatal: no upstream configured for branch')) {
+        let [, branch] = err.message.match(/fatal: no upstream configured for branch '(.*)'/)
+        throw new Error(`${err.message}\nIf you wish to set tracking information for this branch to origin/${branch} you can do so with:
 
-    git branch --set-upstream-to=origin/master master
+    git branch --set-upstream-to=origin/${branch} ${branch}
 `)
       } else throw err
     }

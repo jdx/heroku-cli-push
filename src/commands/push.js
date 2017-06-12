@@ -108,8 +108,9 @@ export default class Status extends Command {
         enabled: () => Git.hasGit,
         skip: () => this.flags.force,
         task: () => new Listr([
-          this.gitDirty(),
+          this.gitFetch(),
           this.gitCurrentBranch(),
+          this.gitDirty(),
           this.gitRemoteHistory()
         ])
       },
@@ -131,11 +132,19 @@ export default class Status extends Command {
     ]
   }
 
+  gitFetch () {
+    return {
+      title: 'Running git fetch',
+      task: async () => {
+        await Git.exec('fetch')
+      }
+    }
+  }
+
   gitRemoteHistory () {
     return {
       title: 'Check remote history',
       task: async () => {
-        await Git.exec('fetch')
         let changes = await Git.exec('rev-list', '--count', '--left-only', '@{u}...HEAD')
         if (changes !== '0') throw new Error(`Remote history differs. Please pull ${changes} changes. Run with --force to push a build to Heroku anyway.`)
 
