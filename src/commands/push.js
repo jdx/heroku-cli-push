@@ -70,7 +70,11 @@ export default class Status extends Command {
       if (err.code === 'ENOENT') throw new Error(`${this.root} does not exist`)
       else throw err
     }
-    this.out.log(`Pushing ${color.blue(process.cwd())} to ${color.app(this._app)}...`)
+    if (this.root === process.cwd()) {
+      this.out.log(`Pushing to ${color.app(this._app)}...`)
+    } else {
+      this.out.log(`Pushing ${color.blue(process.cwd())} to ${color.app(this._app)}...`)
+    }
     const tasks = this.tasks()
     const options = {
       renderer: this.renderer
@@ -342,7 +346,7 @@ export default class Status extends Command {
           e.on('error', err => o.error(err))
           e.on('complete', () => o.complete())
           e.on('data', d => {
-            if (d.startsWith('-----> ')) {
+            if (!this.renderer && d.startsWith('-----> ')) {
               e.removeAllListeners('data')
               this.listr.add(this.streamBuild(d.substr(7), e))
               o.complete()
