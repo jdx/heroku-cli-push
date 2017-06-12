@@ -10,7 +10,7 @@ import zlib from 'zlib'
 import tmp from 'tmp'
 import {Observable} from 'rxjs/Observable'
 import Git from '../git'
-import AppJson, {type App} from '../app_json'
+import AppJson from '../app_json'
 
 const debug = require('debug')('heroku-cli:builds:push')
 const wait = ms => new Promise(resolve => (setTimeout(resolve, ms): any).unref())
