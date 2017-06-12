@@ -6,5 +6,7 @@ export const topic = {
 }
 
 export const commands = [
-  require('./commands/push')
+  require('./commands/push'),
+  require('./commands/builds'),
+  require('./commands/output')
 ]

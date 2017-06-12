@@ -11,7 +11,7 @@ import tmp from 'tmp'
 import {spawnSync} from 'child_process'
 import {Observable} from 'rxjs/Observable'
 
-const debug = require('debug')('heroku-cli:push')
+const debug = require('debug')('heroku-cli:builds:push')
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 type Source = {
@@ -31,7 +31,7 @@ function lastLine (s: string): string {
 }
 
 class Git {
-  static debug = require('debug')('heroku-cli:push:git')
+  static debug = require('debug')('heroku-cli:builds:push:git')
 
   static get hasGit (): boolean {
     return fs.existsSync('.git')
@@ -73,7 +73,9 @@ class Git {
 }
 
 export default class Status extends Command {
-  static topic = 'push'
+  static topic = 'builds'
+  static command = 'push'
+  static aliases = ['push']
   static description = 'push code to heroku'
   static flags = {
     app: flags.app({required: true}),
