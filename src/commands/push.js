@@ -5,7 +5,13 @@ import {Command, flags} from 'cli-engine-heroku'
 import path from 'path'
 import execa from 'execa'
 import fs from 'fs-extra'
+import tar from 'tar-fs'
+import zlib from 'zlib'
+import tmp from 'tmp'
+import {spawnSync} from 'child_process'
+import {Observable} from 'rxjs/Observable'
 
+const debug = require('debug')('heroku-cli:push')
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 type Source = {
@@ -16,12 +22,32 @@ type Source = {
 }
 
 type Build = {
+  id: string,
   output_stream_url: string
 }
 
+function lastLine (s: string): string {
+  return s.split('\n').map(s => s.trim()).filter(s => s).reverse()[0]
+}
+
 class Git {
+  static debug = require('debug')('heroku-cli:push:git')
+
   static get hasGit (): boolean {
     return fs.existsSync('.git')
+  }
+
+  static async exec (...args: string[]): Promise<string> {
+    if (!this.hasGit) throw new Error('not a git repository')
+    debug(args.join(' '))
+    return execa.stdout('git', args)
+  }
+
+  static execSync (...args: string[]) {
+    if (!this.hasGit) throw new Error('not a git repository')
+    let cmd = spawnSync('git', args, {encoding: 'utf8'})
+    debug(`git ${args.join(' ')} = code: ${cmd.status} stdout: ${(cmd.stdout: any)}`)
+    return cmd
   }
 
   static async dirty (): Promise<boolean> {
@@ -38,9 +64,11 @@ class Git {
     return this.exec('rev-parse', 'HEAD')
   }
 
-  static async exec (...args: string[]): Promise<string> {
-    if (!this.hasGit) throw new Error('not a git repository')
-    return execa.stdout('git', args)
+  static checkIgnore (f: string): boolean {
+    let cmd = this.execSync('check-ignore', f)
+    if (cmd.status === 0) return true
+    else if (cmd.status === 1) return false
+    else throw new Error(cmd.output[2])
   }
 }
 
@@ -66,6 +94,8 @@ export default class Status extends Command {
 
   source: Source
   build: Build
+  tarballHash: {md5: string, sha256: string}
+  buildOutput: string
 
   async run () {
     const {color} = this.out
@@ -78,11 +108,19 @@ export default class Status extends Command {
     }
     const listr = new Listr(tasks, options)
     await listr.run()
+    this.out.log(lastLine(this.buildOutput))
   }
 
   get _app (): string {
     if (!this.app) throw new Error('no app specified')
     return this.app
+  }
+
+  _tarballFile: ?string
+  get tarballFile (): string {
+    if (this._tarballFile) return this._tarballFile
+    this._tarballFile = tmp.tmpNameSync({postfix: '.tar.gz'})
+    return this._tarballFile
   }
 
   validate () {
@@ -109,11 +147,17 @@ export default class Status extends Command {
           this.gitCurrentBranch()
         ], {concurrent: true})
       },
-      this.tests(),
+      // this.tests(),
       {
-        title: 'Create build',
+        title: 'Uploading source',
         task: () => new Listr([
-          this.createSource(),
+          {
+            title: 'Creating source',
+            task: () => new Listr([
+              this.createSource(),
+              this.createTarball()
+            ], {concurrent: true})
+          },
           this.uploadSource(),
           this.createBuild()
         ])
@@ -157,13 +201,13 @@ export default class Status extends Command {
     }
   }
 
-  tests () {
-    return {
-      title: 'Run tests',
-      skip: () => this.flags.yolo,
-      task: () => wait(300)
-    }
-  }
+  // tests () {
+  //   return {
+  //     title: 'Run tests',
+  //     skip: () => this.flags.yolo,
+  //     task: () => wait(300)
+  //   }
+  // }
 
   createSource () {
     return {
@@ -174,23 +218,67 @@ export default class Status extends Command {
     }
   }
 
+  createTarball () {
+    return {
+      title: 'Creating tarball',
+      task: () => {
+        let crypto = require('crypto')
+        let hashers = {
+          md5: crypto.createHash('md5'),
+          sha256: crypto.createHash('sha256')
+        }
+        debug(`tarball: ${this.tarballFile}`)
+        let pack = tar.pack('.', {
+          ignore: (f) => {
+            if (['.git'].includes(f)) return true
+            return Git.checkIgnore(f)
+          }
+        })
+        .pipe(zlib.createGzip())
+        .on('data', d => {
+          hashers.md5.update(d)
+          hashers.sha256.update(d)
+        })
+        .pipe(fs.createWriteStream(this.tarballFile))
+        return new Promise((resolve, reject) => {
+          pack.on('error', reject)
+          pack.on('close', () => {
+            this.tarballHash = {
+              sha256: hashers.sha256.digest('hex'),
+              md5: hashers.md5.digest('hex')
+            }
+            debug(`md5 hash of tarball: ${this.tarballHash.md5}`)
+            debug(`sha256 hash of tarball: ${this.tarballHash.sha256}`)
+            resolve()
+          })
+        })
+      }
+    }
+  }
+
   uploadSource () {
     return {
       title: 'Uploading source',
       task: async () => {
-        // console.dir(this.source)
+        await this.http.put(this.source.source_blob.put_url, {
+          body: fs.createReadStream(this.tarballFile),
+          headers: {
+            // 'Content-MD5': this.tarballHash.md5,
+            'Content-Length': fs.statSync(this.tarballFile).size
+          }
+        })
       }
     }
   }
 
   createBuild () {
     return {
-      title: 'Uploading source',
+      title: 'Creating build',
       task: async () => {
         this.build = await this.heroku.post(`/apps/${this._app}/builds`, {
           body: {
             source_blob: {
-              // TODO: checksum
+              checksum: `SHA256:${this.tarballHash.sha256}`,
               version: await Git.sha(),
               url: this.source.source_blob.get_url
             }
@@ -202,9 +290,38 @@ export default class Status extends Command {
 
   streamBuild () {
     return {
-      title: 'Build',
+      title: 'Building',
       task: async () => {
-        // console.dir(this.source)
+        return new Observable(o => {
+          let streamBuild = async () => {
+            let stream = await this.heroku.stream(this.build.output_stream_url)
+            return new Promise((resolve, reject) => {
+              stream.setEncoding('utf8')
+              stream.on('data', data => {
+                this.buildOutput += data
+                o.next(data.trim())
+              })
+              stream.on('error', reject)
+              stream.on('end', resolve)
+            })
+          }
+          let buildCheck = async () => {
+            let build = await this.heroku.get(`/apps/${this._app}/builds/${this.build.id}`)
+            switch (build.status) {
+              case 'pending':
+                await wait(500)
+                return buildCheck()
+              case 'failed':
+                let result = await this.heroku.get(`/apps/${this._app}/builds/${this.build.id}/result`)
+                throw new Error(result.lines.map(l => l.line).join('\n'))
+              case 'succeeded':
+                return
+              default:
+                throw new Error(`unexpected status: ${build.status}`)
+            }
+          }
+          Promise.all([streamBuild(), buildCheck()]).then(() => o.complete()).catch(err => o.error(err))
+        })
       }
     }
   }
