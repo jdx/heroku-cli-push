@@ -11,6 +11,7 @@ import tmp from 'tmp'
 import {Observable} from 'rxjs/Observable'
 import Git from '../git'
 import AppJson from '../app_json'
+import EventEmitter from 'events'
 
 const debug = require('debug')('heroku-cli:builds:push')
 const wait = ms => new Promise(resolve => (setTimeout(resolve, ms): any).unref())
@@ -58,6 +59,7 @@ export default class Status extends Command {
   build: Build
   tarballHash: {md5: string, sha256: string}
   buildOutput: string
+  listr: Listr
 
   async run () {
     const {color} = this.out
@@ -73,8 +75,8 @@ export default class Status extends Command {
     const options = {
       renderer: this.renderer
     }
-    const listr = new Listr(tasks, options)
-    await listr.run()
+    this.listr = new Listr(tasks, options)
+    await this.listr.run()
     this.out.log(lastLine(this.buildOutput))
   }
 
@@ -295,41 +297,59 @@ export default class Status extends Command {
     }
   }
 
-  streamBuild () {
+  stream () {
+    let e = new EventEmitter()
+    let streamBuild = (async () => {
+      let stream = await this.heroku.stream(this.build.output_stream_url)
+      return new Promise((resolve, reject) => {
+        stream.setEncoding('utf8')
+        stream.on('data', data => {
+          this.buildOutput += data
+          data.trimRight().split('\n').forEach(l => e.emit('data', l))
+        })
+        stream.on('error', reject)
+        stream.on('end', resolve)
+      })
+    })()
+    let buildCheck = async () => {
+      let build = await this.heroku.get(`/apps/${this._app}/builds/${this.build.id}`)
+      switch (build.status) {
+        case 'pending':
+          await Promise.race([streamBuild, wait(30000)])
+          return buildCheck()
+        case 'failed':
+          let result = await this.heroku.get(`/apps/${this._app}/builds/${this.build.id}/result`)
+          throw new Error(result.lines.map(l => l.line).join(''))
+        case 'succeeded':
+          return
+        default:
+          throw new Error(`unexpected status: ${build.status}`)
+      }
+    }
+    Promise.all([streamBuild, buildCheck()])
+      .then(() => e.emit('complete'))
+      .catch(err => e.emit('error', err))
+    e.setMaxListeners(0)
+    return e
+  }
+
+  streamBuild (title: string = 'Start build', e: EventEmitter) {
     return {
-      title: 'Building',
-      task: async () => {
+      title,
+      task: () => {
         return new Observable(o => {
-          let streamBuild = (async () => {
-            let stream = await this.heroku.stream(this.build.output_stream_url)
-            return new Promise((resolve, reject) => {
-              stream.setEncoding('utf8')
-              stream.on('data', data => {
-                this.buildOutput += data
-                data.trimRight().split('\n').forEach(l => o.next(l))
-              })
-              stream.on('error', reject)
-              stream.on('end', resolve)
-            })
-          })()
-          let buildCheck = async () => {
-            let build = await this.heroku.get(`/apps/${this._app}/builds/${this.build.id}`)
-            switch (build.status) {
-              case 'pending':
-                await Promise.race([streamBuild, wait(30000)])
-                return buildCheck()
-              case 'failed':
-                let result = await this.heroku.get(`/apps/${this._app}/builds/${this.build.id}/result`)
-                throw new Error(result.lines.map(l => l.line).join(''))
-              case 'succeeded':
-                return
-              default:
-                throw new Error(`unexpected status: ${build.status}`)
+          if (!e) e = this.stream()
+          e.on('error', err => o.error(err))
+          e.on('complete', () => o.complete())
+          e.on('data', d => {
+            if (d.startsWith('-----> ')) {
+              e.removeAllListeners('data')
+              this.listr.add(this.streamBuild(d.substr(7), e))
+              o.complete()
+            } else {
+              o.next(d)
             }
-          }
-          Promise.all([streamBuild, buildCheck()])
-            .then(() => o.complete())
-            .catch(err => o.error(err))
+          })
         })
       }
     }
