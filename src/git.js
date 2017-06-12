@@ -40,8 +40,9 @@ export default class Git {
     return status !== ''
   }
 
-  static async branch (): Promise<string> {
-    return this.exec('symbolic-ref', '--short', 'HEAD')
+  static branch (): string {
+    let cmd = this.execSync('symbolic-ref', '--short', 'HEAD')
+    return (cmd.stdout: any).trim()
   }
 
   static async sha (): Promise<?string> {

@@ -10,6 +10,7 @@ import zlib from 'zlib'
 import tmp from 'tmp'
 import {Observable} from 'rxjs/Observable'
 import Git from '../git'
+import AppJson, {type App} from '../app_json'
 
 const debug = require('debug')('heroku-cli:builds:push')
 const wait = ms => new Promise(resolve => (setTimeout(resolve, ms): any).unref())
@@ -36,7 +37,8 @@ export default class Status extends Command {
   static aliases = ['push']
   static description = 'push code to heroku'
   static flags = {
-    app: flags.app({required: true}),
+    // app: flags.app({required: true}),
+    app: flags.app(),
     remote: flags.remote(),
     verbose: flags.boolean({char: 'v', description: 'display all progress output'}),
     silent: flags.boolean({char: 's', description: 'display no progress output'}),
@@ -76,9 +78,21 @@ export default class Status extends Command {
     this.out.log(lastLine(this.buildOutput))
   }
 
+  __app: ?string
   get _app (): string {
-    if (!this.app) throw new Error('no app specified')
-    return this.app
+    if (this.__app) return this.__app
+    this.__app = this.flags.app
+    let env = this.appJson.currentEnvironment
+    if (!this.__app && env && env.app) this.__app = env.app
+    if (!this.__app) throw new Error('no app specified')
+    return this.__app
+  }
+
+  _appJson: AppJson
+  get appJson (): AppJson {
+    if (this._appJson) return this._appJson
+    this._appJson = new AppJson()
+    return this._appJson
   }
 
   _tarballFile: ?string
@@ -192,8 +206,10 @@ export default class Status extends Command {
       title: 'Check current branch',
       skip: () => this.flags['any-branch'],
       task: async () => {
-        let branch = await Git.branch()
-        if (branch !== 'master') throw new Error('Not on `master` branch. Use --any-branch to push anyway.')
+        let env = this.appJson.currentEnvironment
+        const expected = (env && env.branch) ? env.branch : 'master'
+        const current = await Git.branch()
+        if (current !== expected) throw new Error(`On ${current} not ${expected} branch. Use --any-branch to push anyway.`)
       }
     }
   }
