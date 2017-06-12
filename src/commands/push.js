@@ -10,6 +10,7 @@ import zlib from 'zlib'
 import tmp from 'tmp'
 import {spawnSync} from 'child_process'
 import {Observable} from 'rxjs/Observable'
+import Git from '../git'
 
 const debug = require('debug')('heroku-cli:builds:push')
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -28,48 +29,6 @@ type Build = {
 
 function lastLine (s: string): string {
   return s.split('\n').map(s => s.trim()).filter(s => s).reverse()[0]
-}
-
-class Git {
-  static debug = require('debug')('heroku-cli:builds:push:git')
-
-  static get hasGit (): boolean {
-    return fs.existsSync('.git')
-  }
-
-  static async exec (...args: string[]): Promise<string> {
-    if (!this.hasGit) throw new Error('not a git repository')
-    debug(args.join(' '))
-    return execa.stdout('git', args)
-  }
-
-  static execSync (...args: string[]) {
-    if (!this.hasGit) throw new Error('not a git repository')
-    let cmd = spawnSync('git', args, {encoding: 'utf8'})
-    debug(`git ${args.join(' ')} = code: ${cmd.status} stdout: ${(cmd.stdout: any)}`)
-    return cmd
-  }
-
-  static async dirty (): Promise<boolean> {
-    let status = await this.exec('status', '--porcelain')
-    return status !== ''
-  }
-
-  static async branch (): Promise<string> {
-    return this.exec('symbolic-ref', '--short', 'HEAD')
-  }
-
-  static async sha (): Promise<?string> {
-    if (await this.dirty) return
-    return this.exec('rev-parse', 'HEAD')
-  }
-
-  static checkIgnore (f: string): boolean {
-    let cmd = this.execSync('check-ignore', f)
-    if (cmd.status === 0) return true
-    else if (cmd.status === 1) return false
-    else throw new Error(cmd.output[2])
-  }
 }
 
 export default class Status extends Command {
@@ -315,14 +274,16 @@ export default class Status extends Command {
                 return buildCheck()
               case 'failed':
                 let result = await this.heroku.get(`/apps/${this._app}/builds/${this.build.id}/result`)
-                throw new Error(result.lines.map(l => l.line).join('\n'))
+                throw new Error(result.lines.map(l => l.line).join(''))
               case 'succeeded':
                 return
               default:
                 throw new Error(`unexpected status: ${build.status}`)
             }
           }
-          Promise.all([streamBuild(), buildCheck()]).then(() => o.complete()).catch(err => o.error(err))
+          Promise.all([streamBuild(), buildCheck()])
+            .then(() => o.complete())
+            .catch(err => o.error(err))
         })
       }
     }
