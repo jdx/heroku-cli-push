@@ -299,7 +299,7 @@ export default class Status extends Command {
               stream.setEncoding('utf8')
               stream.on('data', data => {
                 this.buildOutput += data
-                o.next(data.trim())
+                data.trim().split('\n').forEach(l => o.next(l))
               })
               stream.on('error', reject)
               stream.on('end', resolve)
