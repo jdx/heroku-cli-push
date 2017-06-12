@@ -5,7 +5,7 @@ import fs from 'fs-extra'
 import {spawnSync} from 'child_process'
 const debug = require('debug')('heroku:builds:git')
 
-export class Git {
+export default class Git {
   static debug = require('debug')('heroku-cli:builds:push:git')
 
   static get hasGit (): boolean {
@@ -15,7 +15,16 @@ export class Git {
   static async exec (...args: string[]): Promise<string> {
     if (!this.hasGit) throw new Error('not a git repository')
     debug(args.join(' '))
-    return execa.stdout('git', args)
+    try {
+      return await execa.stdout('git', args)
+    } catch (err) {
+      if (err.message.includes("fatal: no upstream configured for branch 'master'")) {
+        throw new Error(`${err.message}\nIf you wish to set tracking information for this branch to origin/master you can do so with:
+
+    git branch --set-upstream-to=origin/master master
+`)
+      } else throw err
+    }
   }
 
   static execSync (...args: string[]) {
@@ -35,8 +44,14 @@ export class Git {
   }
 
   static async sha (): Promise<?string> {
-    if (await this.dirty) return
+    if (await this.dirty()) return
     return this.exec('rev-parse', 'HEAD')
+  }
+
+  static async description (): Promise<string> {
+    if (await this.dirty()) return 'dirty'
+    let log = await this.exec('log', '-1', '--pretty=  * %an: %B')
+    return log.trimRight()
   }
 
   static checkIgnore (f: string): boolean {

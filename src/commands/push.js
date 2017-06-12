@@ -8,12 +8,11 @@ import fs from 'fs-extra'
 import tar from 'tar-fs'
 import zlib from 'zlib'
 import tmp from 'tmp'
-import {spawnSync} from 'child_process'
 import {Observable} from 'rxjs/Observable'
 import Git from '../git'
 
 const debug = require('debug')('heroku-cli:builds:push')
-const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
+const wait = ms => new Promise(resolve => (setTimeout(resolve, ms): any).unref())
 
 type Source = {
   source_blob: {
@@ -41,7 +40,7 @@ export default class Status extends Command {
     remote: flags.remote(),
     verbose: flags.boolean({char: 'v', description: 'display all progress output'}),
     silent: flags.boolean({char: 's', description: 'display no progress output'}),
-    yolo: flags.boolean({description: 'disable all git checks'}),
+    force: flags.boolean({description: 'disable all git checks'}),
     dirty: flags.boolean({description: 'disable git dirty check'}),
     'any-branch': flags.boolean({description: 'allow pushing from branch other than master'})
   }
@@ -61,7 +60,12 @@ export default class Status extends Command {
   async run () {
     const {color} = this.out
     this.validate()
-    process.chdir(this.root)
+    try {
+      process.chdir(this.root)
+    } catch (err) {
+      if (err.code === 'ENOENT') throw new Error(`${this.root} does not exist`)
+      else throw err
+    }
     this.out.log(`Pushing ${color.blue(process.cwd())} to ${color.app(this._app)}...`)
     const tasks = this.tasks()
     const options = {
@@ -101,14 +105,14 @@ export default class Status extends Command {
     return [
       {
         title: 'Git prerequisite checks',
-        skip: () => this.flags.yolo,
+        enabled: () => Git.hasGit,
+        skip: () => this.flags.force,
         task: () => new Listr([
-          this.gitRemoteHistory(),
           this.gitDirty(),
-          this.gitCurrentBranch()
-        ], {concurrent: true})
+          this.gitCurrentBranch(),
+          this.gitRemoteHistory()
+        ])
       },
-      // this.tests(),
       {
         title: 'Uploading source',
         task: () => new Listr([
@@ -131,11 +135,34 @@ export default class Status extends Command {
     return {
       title: 'Check remote history',
       task: async () => {
-        let rev = await execa.stdout('git', ['rev-list', '--count', '--left-only', '@{u}...HEAD'])
-        if (rev !== '0') throw new Error('Remote history differs. Please pull changes.')
-        await wait(400) // fake wait for demo
+        await Git.exec('fetch')
+        let changes = await Git.exec('rev-list', '--count', '--left-only', '@{u}...HEAD')
+        if (changes !== '0') throw new Error(`Remote history differs. Please pull ${changes} changes. Run with --force to push a build to Heroku anyway.`)
+
+        let lastBuild = await this.lastHerokuBuild()
+        if (lastBuild && lastBuild.source_blob && lastBuild.source_blob.version) {
+          let {version, version_description: description} = lastBuild.source_blob
+          description = description ? description = `\nVersion description: ${description}` : ''
+          try {
+            await execa.stdout('git', ['rev-list', '--count', '--left-only', `${version}...HEAD`])
+          } catch (err) {
+            if (!err.message.includes('Invalid symmetric difference expression')) throw err
+            throw new Error(`Git SHA: ${version} exists on Heroku but not locally.${description}\nUse --force to push anyway.`)
+          }
+        }
       }
     }
+  }
+
+  async lastHerokuBuild (startedAt: ?string) {
+    let builds = await this.heroku.get(`/apps/${this._app}/builds`, {
+      partial: true,
+      headers: {range: `started_at ${startedAt || ''}..; max=100, order=desc`}
+    })
+    if (!builds.length) return
+    let build = builds.find(b => b.status === 'succeeded')
+    if (build) return build
+    return this.lastHerokuBuild(builds[builds.length - 1].created_at)
   }
 
   gitDirty () {
@@ -144,8 +171,9 @@ export default class Status extends Command {
       skip: () => this.flags.dirty,
       task: async () => {
         let dirty = await Git.dirty()
-        if (dirty) throw new Error('Unclean working tree. Commit or stash changes first.')
-        await wait(400) // fake wait for demo
+        if (dirty) throw new Error('Unclean working tree. Commit or stash changes first. Use --dirty or --force to push anyway.')
+        let changes = await Git.exec('rev-list', '--count', '--right-only', '@{u}...HEAD')
+        if (changes !== '0') throw new Error(`${changes} unpushed commits. Please push changes to origin. Run with --dirty or --force to push a build to Heroku anyway.`)
       }
     }
   }
@@ -156,19 +184,10 @@ export default class Status extends Command {
       skip: () => this.flags['any-branch'],
       task: async () => {
         let branch = await Git.branch()
-        if (branch !== 'master') throw new Error('Not on `master` branch. Use --any-branch to publish anyway.')
-        await wait(800) // fake wait for demo
+        if (branch !== 'master') throw new Error('Not on `master` branch. Use --any-branch to push anyway.')
       }
     }
   }
-
-  // tests () {
-  //   return {
-  //     title: 'Run tests',
-  //     skip: () => this.flags.yolo,
-  //     task: () => wait(300)
-  //   }
-  // }
 
   createSource () {
     return {
@@ -191,6 +210,7 @@ export default class Status extends Command {
         debug(`tarball: ${this.tarballFile}`)
         let pack = tar.pack('.', {
           ignore: (f) => {
+            if (!Git.hasGit) return false
             if (['.git'].includes(f)) return true
             return Git.checkIgnore(f)
           }
@@ -241,6 +261,7 @@ export default class Status extends Command {
             source_blob: {
               checksum: `SHA256:${this.tarballHash.sha256}`,
               version: await Git.sha(),
+              version_description: await Git.description(),
               url: this.source.source_blob.get_url
             }
           }
@@ -254,7 +275,7 @@ export default class Status extends Command {
       title: 'Building',
       task: async () => {
         return new Observable(o => {
-          let streamBuild = async () => {
+          let streamBuild = (async () => {
             let stream = await this.heroku.stream(this.build.output_stream_url)
             return new Promise((resolve, reject) => {
               stream.setEncoding('utf8')
@@ -265,12 +286,12 @@ export default class Status extends Command {
               stream.on('error', reject)
               stream.on('end', resolve)
             })
-          }
+          })()
           let buildCheck = async () => {
             let build = await this.heroku.get(`/apps/${this._app}/builds/${this.build.id}`)
             switch (build.status) {
               case 'pending':
-                await wait(500)
+                await Promise.race([streamBuild, wait(30000)])
                 return buildCheck()
               case 'failed':
                 let result = await this.heroku.get(`/apps/${this._app}/builds/${this.build.id}/result`)
@@ -281,7 +302,7 @@ export default class Status extends Command {
                 throw new Error(`unexpected status: ${build.status}`)
             }
           }
-          Promise.all([streamBuild(), buildCheck()])
+          Promise.all([streamBuild, buildCheck()])
             .then(() => o.complete())
             .catch(err => o.error(err))
         })
