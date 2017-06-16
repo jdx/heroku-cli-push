@@ -246,12 +246,12 @@ export default class Status extends Command {
             return Git.checkIgnore(f)
           }
         })
-        .pipe(zlib.createGzip())
-        .on('data', d => {
-          hashers.md5.update(d)
-          hashers.sha256.update(d)
-        })
-        .pipe(fs.createWriteStream(this.tarballFile))
+          .pipe(zlib.createGzip())
+          .on('data', d => {
+            hashers.md5.update(d)
+            hashers.sha256.update(d)
+          })
+          .pipe(fs.createWriteStream(this.tarballFile))
         return new Promise((resolve, reject) => {
           pack.on('error', reject)
           pack.on('close', () => {
