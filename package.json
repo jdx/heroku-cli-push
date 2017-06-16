@@ -1,7 +1,7 @@
 {
   "name": "heroku-cli-build",
   "description": "CLI Plugin for Heroku Push",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "author": "Jeff Dickey @dickeyxxx",
   "bugs": {
     "url": "https://github.com/heroku/heroku-cli-build/issues"
