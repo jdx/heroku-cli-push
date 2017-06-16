@@ -1,10 +1,10 @@
 {
-  "name": "heroku-cli-push",
+  "name": "heroku-cli-build",
   "description": "CLI Plugin for Heroku Push",
   "version": "0.0.0",
   "author": "Jeff Dickey @dickeyxxx",
   "bugs": {
-    "url": "https://github.com/heroku/heroku-cli-push/issues"
+    "url": "https://github.com/heroku/heroku-cli-build/issues"
   },
   "dependencies": {
     "cli-engine-command": "^5.1.3",
@@ -39,7 +39,7 @@
   "files": [
     "lib"
   ],
-  "homepage": "https://github.com/heroku/heroku-cli-push",
+  "homepage": "https://github.com/heroku/heroku-cli-build",
   "keywords": [
     "heroku-plugin"
   ],
@@ -47,7 +47,7 @@
   "main": "lib/index.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/heroku/heroku-cli-push"
+    "url": "https://github.com/heroku/heroku-cli-build"
   },
   "scripts": {
     "build": "babel src -d lib --ignore '*.test.js'",
